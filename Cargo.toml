@@ -1,0 +1,13 @@
+[package]
+name = "nomad_external_dns"
+description = "Nomad External DNS Tool"
+repository = "https://github.com/codercengiz/nomad-external-dns"
+license = "MIT"
+readme = "README.md"
+keywords = ["nomad", "external", "dns"]
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+clap = "4"
