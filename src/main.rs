@@ -1,9 +1,11 @@
 use anyhow::Error;
 use dns::{DnsRecord, DnsRecordCreate};
+use reqwest::Url;
 
-use crate::nomad::NomadDnsTag;
+use crate::{consul::ConsulClient, nomad::NomadDnsTag};
 
 mod config;
+mod consul;
 mod dns;
 mod nomad;
 
@@ -11,6 +13,16 @@ mod nomad;
 async fn main() {
     let config = config::parse_args();
     print!("Config: {:?}", config);
+
+    // Initialize Consul Client
+    let consul_client = ConsulClient::new(Url::parse(&config.consul_address).expect("Invalid URL"))
+        .expect("Failed to create Consul client");
+
+    // Acquire Lock
+    if let Err(e) = consul_client.acquire_lock().await {
+        eprintln!("Failed to acquire Consul lock: {}", e);
+        return;
+    }
 
     let nomad_tag = match nomad::fetch_and_parse_service_tags(&config).await {
         Ok(tag) => tag,
@@ -31,6 +43,11 @@ async fn main() {
 
     let update_or_create_result =
         update_or_create_dns_record(&config, &nomad_tag, &existing_records).await;
+
+    // Release Lock
+    if consul_client.drop_lock().await.is_err() {
+        eprintln!("Failed to release Consul lock");
+    }
 
     match update_or_create_result {
         Ok(_) => println!("DNS record updated or created successfully"),

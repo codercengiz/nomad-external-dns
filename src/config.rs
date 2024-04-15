@@ -9,6 +9,7 @@ pub struct Config {
     pub nomad_service_name: String,
     pub nomad_hostname: String,
     pub nomad_port: String,
+    pub consul_address: String,
 }
 
 /// Function to parse the command-line arguments and return a Config instance
@@ -53,6 +54,14 @@ pub fn parse_args() -> Config {
                 .default_value("4646")
                 .required(false),
         )
+        .arg(
+            Arg::new("consul-address")
+                .long("consul-address")
+                .value_name("CONSUL_ADDRESS")
+                .help("Sets the address of the Consul server")
+                .default_value("http://127.0.0.1:8500")
+                .required(false),
+        )
         .get_matches();
 
     Config {
@@ -73,5 +82,9 @@ pub fn parse_args() -> Config {
             .unwrap()
             .to_owned(),
         nomad_port: matches.get_one::<String>("nomad-port").unwrap().to_owned(),
+        consul_address: matches
+            .get_one::<String>("consul-address")
+            .unwrap()
+            .to_owned(),
     }
 }
