@@ -1,0 +1,104 @@
+name: Build and Publish Nomad-External-DNS
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: Binary ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+          - target: x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
+          - target: aarch64-unknown-linux-gnu
+          - target: armv7-unknown-linux-musleabihf
+          - target: armv7-unknown-linux-gnueabihf
+          - target: arm-unknown-linux-musleabihf
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: sudo apt update && sudo apt install musl-tools
+
+      - name: Build
+        uses: houseabsolute/actions-rust-cross@v0
+        with:
+          command: build
+          args: --release
+          target: ${{ matrix.target }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/nomad_external_dns
+
+  publish:
+      needs: build
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - run: sudo apt update && sudo apt install podman
+        - name: Podman Login
+          run: podman login --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} ghcr.io
+
+        - name: Download and Build - x86_64-unknown-linux-musl
+          uses: actions/download-artifact@v4
+          with:
+            name: x86_64-unknown-linux-musl
+            path: target/x86_64-unknown-linux-musl/release
+
+        - name: Download and Build - x86_64-unknown-linux-gnu
+          uses: actions/download-artifact@v4
+          with:
+            name: x86_64-unknown-linux-gnu
+            path: target/x86_64-unknown-linux-gnu/release
+
+        - name: Download and Build - aarch64-unknown-linux-musl
+          uses: actions/download-artifact@v4
+          with:
+            name: aarch64-unknown-linux-musl
+            path: target/aarch64-unknown-linux-musl/release
+
+        - name: Download and Build - aarch64-unknown-linux-gnu
+          uses: actions/download-artifact@v4
+          with:
+            name: aarch64-unknown-linux-gnu
+            path: target/aarch64-unknown-linux-gnu/release
+
+        - name: Download and Build - armv7-unknown-linux-musleabihf
+          uses: actions/download-artifact@v4
+          with:
+            name: armv7-unknown-linux-musleabihf
+            path: target/armv7-unknown-linux-musleabihf/release
+
+        - name: Download and Build - armv7-unknown-linux-gnueabihf
+          uses: actions/download-artifact@v4
+          with:
+            name: armv7-unknown-linux-gnueabihf
+            path: target/armv7-unknown-linux-gnueabihf/release
+
+        - name: Download and Build - arm-unknown-linux-musleabihf
+          uses: actions/download-artifact@v4
+          with:
+            name: arm-unknown-linux-musleabihf
+            path: target/arm-unknown-linux-musleabihf/release
+
+        - name: podman build linux/arm64
+          run: podman build --format docker --platform linux/arm64/v8 --manifest nomad-external-dns -f Containerfile target/aarch64-unknown-linux-gnu/release
+
+        - name: podman build linux/amd64
+          run: podman build --format docker --platform linux/amd64 --manifest nomad-external-dns -f Containerfile target/x86_64-unknown-linux-gnu/release
+
+        - name: podman build linux/arm
+          run: podman build --format docker --platform linux/arm/v7 --manifest nomad-external-dns -f Containerfile target/armv7-unknown-linux-gnueabihf/release
+
+        - name: Push Images
+          run: |
+            podman manifest push nomad-external-dns ghcr.io/codercengiz/nomad-external-dns:latest
+
