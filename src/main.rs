@@ -1,8 +1,9 @@
 use anyhow::Error;
+use clap::Parser;
 use dns::{DnsRecord, DnsRecordCreate};
 use reqwest::Url;
 
-use crate::{consul::ConsulClient, nomad::NomadDnsTag};
+use crate::{config::Config, consul::ConsulClient, nomad::NomadDnsTag};
 
 mod config;
 mod consul;
@@ -11,12 +12,14 @@ mod nomad;
 
 #[tokio::main]
 async fn main() {
-    let config = config::parse_args();
-    print!("Config: {:?}", config);
-
+    let config = Config::parse();
+    
     // Initialize Consul Client
-    let consul_client = ConsulClient::new(Url::parse(&config.consul_address).expect("Invalid URL"))
-        .expect("Failed to create Consul client");
+    let consul_client = ConsulClient::new(
+        Url::parse(&config.consul_address).expect("Invalid URL"),
+        config.consul_datacenter.clone(),
+    )
+    .expect("Failed to create Consul client");
 
     // Acquire Lock
     if let Err(e) = consul_client.acquire_lock().await {
