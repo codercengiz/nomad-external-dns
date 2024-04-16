@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use clap::Parser;
 
 use reqwest::Url;
+use tokio::time::sleep;
 
 use crate::{
     config::{Config, DnsProvider},
@@ -19,11 +22,18 @@ async fn main() {
     let config = Config::parse();
 
     // Initialize Consul Client
-    let consul_client = ConsulClient::new(
-        Url::parse(&config.consul_address).expect("Invalid URL"),
-        config.consul_datacenter.clone(),
-    )
-    .expect("Failed to create Consul client");
+    let consul_client = loop {
+        match ConsulClient::new(
+            Url::parse(&config.consul_address).expect("Invalid URL"),
+            config.consul_datacenter.clone(),
+        ) {
+            Ok(client) => break client,
+            Err(e) => {
+                eprintln!("Failed to create Consul client: {}. Retrying in 100ms", e);
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+    };
 
     // Acquire Lock
     if let Err(e) = consul_client.acquire_lock().await {
