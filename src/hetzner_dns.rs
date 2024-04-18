@@ -7,8 +7,6 @@ use crate::{
     nomad::NomadDnsTag,
 };
 
-const HETZNER_API_URL: &str = "https://dns.hetzner.com/api/v1";
-
 pub struct HetznerDns {
     pub config: HetznerConfig,
 }
@@ -22,10 +20,7 @@ impl DnsProviderTrait for HetznerDns {
         &self,
         nomad_tag: &'a NomadDnsTag,
     ) -> Result<(), anyhow::Error> {
-        let api_token = &self.config.dns_token;
-        let zone_id = &self.config.dns_zone_id;
-
-        let existing_records = match list_dns_records(api_token, zone_id).await {
+        let existing_records = match list_dns_records(&self.config).await {
             Ok(records) => records,
             Err(e) => {
                 eprintln!("Failed to list DNS records: {}", e);
@@ -49,7 +44,7 @@ impl DnsProviderTrait for HetznerDns {
                         value: nomad_tag.value.clone(),
                         ttl: nomad_tag.ttl,
                     };
-                    update_dns_record(api_token, &updated_record).await?;
+                    update_dns_record(&self.config, &updated_record).await?;
                     Ok(())
                 } else {
                     Ok(())
@@ -58,28 +53,31 @@ impl DnsProviderTrait for HetznerDns {
             None => {
                 // Create a new DNS record
                 let new_record = DnsRecordCreate {
-                    zone_id: zone_id.clone(),
+                    zone_id: self.config.dns_zone_id.clone(),
                     type_: nomad_tag.type_.clone(),
                     name: nomad_tag.hostname.clone(),
                     value: nomad_tag.value.clone(),
                     ttl: nomad_tag.ttl,
                 };
-                create_dns_record(api_token, &new_record).await?;
+                create_dns_record(&self.config, &new_record).await?;
                 Ok(())
             }
         }
     }
 }
 
-async fn list_dns_records(api_token: &str, zone_id: &str) -> Result<Vec<DnsRecord>, Error> {
+async fn list_dns_records(hetzner_config: &HetznerConfig) -> Result<Vec<DnsRecord>, Error> {
     let client = Client::new();
     let mut headers = header::HeaderMap::new();
     headers.insert(
         "Auth-API-Token",
-        header::HeaderValue::from_str(api_token).unwrap(),
+        header::HeaderValue::from_str(&hetzner_config.dns_token).unwrap(),
     );
 
-    let url = format!("{}/records?zone_id={}", HETZNER_API_URL, zone_id);
+    let url = format!(
+        "{}/records?zone_id={}",
+        &hetzner_config.api_url, &hetzner_config.dns_zone_id
+    );
     let response = client.get(url).headers(headers).send().await?;
 
     match response.error_for_status() {
@@ -91,12 +89,15 @@ async fn list_dns_records(api_token: &str, zone_id: &str) -> Result<Vec<DnsRecor
     }
 }
 
-async fn update_dns_record(api_token: &str, record: &DnsRecord) -> Result<(), Error> {
+async fn update_dns_record(
+    hetzner_config: &HetznerConfig,
+    record: &DnsRecord,
+) -> Result<(), Error> {
     let client = Client::new();
-    let url = format!("{}/records/{}", HETZNER_API_URL, record.id);
+    let url = format!("{}/records/{}", &hetzner_config.api_url, &record.id);
     let res = client
         .put(url)
-        .header("Auth-API-Token", api_token)
+        .header("Auth-API-Token", &hetzner_config.dns_token)
         .json(record)
         .send()
         .await?;
@@ -105,12 +106,15 @@ async fn update_dns_record(api_token: &str, record: &DnsRecord) -> Result<(), Er
     Ok(())
 }
 
-async fn create_dns_record(api_token: &str, record_create: &DnsRecordCreate) -> Result<(), Error> {
+async fn create_dns_record(
+    hetzner_config: &HetznerConfig,
+    record_create: &DnsRecordCreate,
+) -> Result<(), Error> {
     let client = Client::new();
-    let url = format!("{}/records", HETZNER_API_URL);
+    let url = format!("{}/records", &hetzner_config.api_url);
     let res = client
         .post(url)
-        .header("Auth-API-Token", api_token)
+        .header("Auth-API-Token", &hetzner_config.dns_token)
         .json(record_create)
         .send()
         .await?;
