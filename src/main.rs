@@ -2,20 +2,13 @@ use std::time::Duration;
 
 use clap::Parser;
 
+use nomad_external_dns::{hetzner_dns, nomad};
 use reqwest::Url;
 use tokio::time::sleep;
 
-use crate::{
-    config::{Config, DnsProvider},
-    consul::ConsulClient,
-    dns_trait::DnsProviderTrait,
-};
-
-mod config;
-mod consul;
-mod dns_trait;
-mod hetzner_dns;
-mod nomad;
+use nomad_external_dns::config::{Config, DnsProvider};
+use nomad_external_dns::consul::ConsulClient;
+use nomad_external_dns::dns_trait::DnsProviderTrait;
 
 #[tokio::main]
 async fn main() {
