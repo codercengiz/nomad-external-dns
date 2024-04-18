@@ -1,11 +1,17 @@
 use async_trait::async_trait;
 use reqwest::{header, Client, Error};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     config::HetznerConfig,
     dns_trait::{DnsProviderTrait, DnsRecord, DnsRecordCreate},
     nomad::NomadDnsTag,
 };
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecordsWrapper {
+    records: Vec<DnsRecord>,
+}
 
 pub struct HetznerDns {
     pub config: HetznerConfig,
@@ -82,8 +88,8 @@ async fn list_dns_records(hetzner_config: &HetznerConfig) -> Result<Vec<DnsRecor
 
     match response.error_for_status() {
         Ok(res) => {
-            let records = res.json::<Vec<DnsRecord>>().await?;
-            Ok(records)
+            let record = res.json::<RecordsWrapper>().await?;
+            Ok(record.records)
         }
         Err(err) => Err(err),
     }
