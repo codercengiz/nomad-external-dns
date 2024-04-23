@@ -1,11 +1,19 @@
 use mockito::{Matcher, ServerGuard};
 
-pub async fn mock_create_dns_record(server: &mut ServerGuard) -> mockito::Mock {
+pub async fn mock_create_dns_record(
+    server: &mut ServerGuard,
+    matcher_body: Option<&str>,
+) -> mockito::Mock {
     print!("Mocking create DNS record");
+    let matcher = match matcher_body {
+        Some(body) => body.into(),
+        None => Matcher::Any,
+    };
+
     server
         .mock("POST", "/records")
         .match_header("Auth-API-Token", Matcher::Any)
-        .match_body(Matcher::Any)
+        .match_body(matcher)
         .with_status(201)
         .with_body(r#"{"id":"new_dns_record_id","message":"DNS record created"}"#)
         .create_async()
