@@ -12,7 +12,15 @@ use nomad_external_dns::dns_trait::DnsProviderTrait;
 
 #[tokio::main]
 async fn main() {
-    let config = Config::parse();
+    println!("Starting up Nomad External DNS");
+    
+    let config = match Config::try_parse() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Failed to parse configuration: {}", e);
+            return;
+        }
+    };
 
     // Initialize Consul Client
     let consul_client = loop {
