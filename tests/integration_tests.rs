@@ -1,12 +1,11 @@
+mod fixtures;
 mod mocks;
 
 #[cfg(test)]
 mod tests {
 
     use std::io::Write;
-    use std::process::{Command, Stdio};
-    use std::thread;
-    use std::time::Duration;
+    use std::process::Command;
 
     use mockito::Server;
     use nomad_external_dns::config::{Config, DnsProvider};
@@ -16,18 +15,18 @@ mod tests {
     use nomad_external_dns::{config::HetznerConfig, nomad};
     use reqwest::Url;
 
+    use crate::fixtures::{self, EnvironmentManager};
     use crate::mocks::{hetzner_mock, nomad_mock};
 
     // It uses the mockito library to mock the Hetzner service response and checks if the DNS record was created.
     #[tokio::test]
     async fn test_create_non_existing_dns_record() {
-        let mut server = Server::new_async().await;
-        let url = server.url();
+        let mut server = fixtures::server().await;
 
         let config = HetznerConfig {
             dns_token: "fake_token".to_string(),
             dns_zone_id: "fake_zone_id".to_string(),
-            api_url: url,
+            api_url: server.url(),
         };
         let hetzner_dns = HetznerDns { config };
         let nomad_tag = NomadDnsTag {
@@ -61,11 +60,10 @@ mod tests {
     // It uses the mockito library to mock the Nomad service response and checks if the tags are fetched correctly.
     #[tokio::test]
     async fn test_get_nomad_tags() {
-        let mut server = Server::new_async().await;
-        let url = server.url();
+        let mut server = fixtures::server().await;
         let get_mock = nomad_mock::mock_get_nomad_service_by_name(&mut server).await;
 
-        let parsed_url = match Url::parse(&url) {
+        let parsed_url = match Url::parse(&server.url()) {
             Ok(url) => url,
             Err(e) => {
                 eprintln!("Failed to parse URL: {}", e);
@@ -118,8 +116,7 @@ mod tests {
     // This is an end-to-end test that checks if the application works as expected.
     #[tokio::test]
     async fn test_end_to_end() {
-        start_consul().await.expect("Failed to start Consul");
-        start_nomad().await.expect("Failed to start Nomad");
+        let _env_manager = EnvironmentManager::new().await;
 
         let mut server = Server::new_async().await;
         let url = server.url();
@@ -183,123 +180,6 @@ mod tests {
 
         // After the job is run, the DNS create API should be called with the expected DNS record
         create_mock.assert();
-
         std::fs::remove_file("tests/dns_job.nomad").expect("Failed to delete nomad file");
-        cleanup();
-    }
-
-    async fn start_consul() -> Result<(), Box<dyn std::error::Error>> {
-        Command::new("docker")
-            .arg("run")
-            .arg("--rm")
-            .arg("--name")
-            .arg("consul-dev")
-            .arg("-p")
-            .arg("8500:8500")
-            .arg("hashicorp/consul")
-            .arg("agent")
-            .arg("-dev")
-            .arg("-client=0.0.0.0")
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("Couldn't run Consul binary");
-
-        let client = reqwest::Client::new();
-        let mut retries = 5;
-        while retries > 0 {
-            let res = client
-                .get("http://127.0.0.1:8500/v1/status/leader")
-                .send()
-                .await;
-
-            match res {
-                Ok(response) if response.status().is_success() => {
-                    println!("Consul is up and running!");
-                    return Ok(());
-                }
-                _ => {
-                    println!("Waiting for Consul to start...");
-                    thread::sleep(Duration::from_secs(1));
-                    retries -= 1;
-                }
-            }
-        }
-
-        Err("Consul did not start in time".into())
-    }
-
-    async fn start_nomad() -> Result<(), Box<dyn std::error::Error>> {
-        Command::new("sudo")
-            .arg("nomad")
-            .arg("agent")
-            .arg("-dev")
-            .arg("-config=tests/nomad.hcl")
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("Couldn't run Nomad binary");
-
-        let client = reqwest::Client::new();
-        let mut retries = 5;
-        while retries > 0 {
-            let res = client
-                .get("http://127.0.0.1:4646/v1/status/leader")
-                .send()
-                .await;
-
-            match res {
-                Ok(response) if response.status().is_success() => {
-                    println!("Nomad is up and running!");
-                    return Ok(());
-                }
-                _ => {
-                    println!("Waiting for Nomad to start...");
-                    thread::sleep(Duration::from_secs(1));
-                    retries -= 1;
-                }
-            }
-        }
-
-        Err("Nomad did not start in time".into())
-    }
-
-    fn cleanup() {
-        Command::new("sudo")
-            .arg("pkill")
-            .arg("-f")
-            .arg("nomad agent")
-            .output()
-            .expect("Failed to stop Nomad");
-
-        println!("Stopping Nomad agent...");
-
-        Command::new("sudo")
-            .arg("pkill")
-            .arg("-f")
-            .arg("consul")
-            .output()
-            .expect("Failed to stop Consul");
-
-        // Stopping the Consul process
-        Command::new("sudo")
-            .arg("pkill")
-            .arg("-f")
-            .arg("consul")
-            .output()
-            .expect("Failed to stop Consul");
-        println!("Stopping Consul...");
-
-        // Stopping and removing the Consul Docker container
-        Command::new("docker")
-            .arg("stop")
-            .arg("consul-dev")
-            .output()
-            .expect("Failed to stop consul-dev Docker container");
-
-        Command::new("docker")
-            .arg("rm")
-            .arg("consul-dev")
-            .output()
-            .expect("Failed to remove consul-dev Docker container");
-        println!("Stopping and removing Docker containers...");
     }
 }
