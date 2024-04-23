@@ -47,6 +47,10 @@ pub struct HetznerConfig {
     pub dns_zone_id: String,
 
     /// Sets the Hetzner DNS API URL. Defaults to "https://dns.hetzner.com/api/v1".
-    #[arg(long, env = "HETZNER_DNS_API_URL", default_value = "https://dns.hetzner.com/api/v1")]
+    #[arg(
+        long,
+        env = "HETZNER_DNS_API_URL",
+        default_value = "https://dns.hetzner.com/api/v1"
+    )]
     pub api_url: String,
 }

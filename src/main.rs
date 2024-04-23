@@ -13,7 +13,7 @@ use nomad_external_dns::dns_trait::DnsProviderTrait;
 #[tokio::main]
 async fn main() {
     println!("Starting up Nomad External DNS");
-    
+
     let config = match Config::try_parse() {
         Ok(config) => config,
         Err(e) => {

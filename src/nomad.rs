@@ -60,9 +60,9 @@ pub async fn fetch_and_parse_service_tags(config: &Config) -> Result<NomadDnsTag
             return Err(anyhow::anyhow!("Error parsing JSON: {}", e));
         }
     };
-    
 
-    let dns_tags = service_detail.task_groups
+    let dns_tags = service_detail
+        .task_groups
         .into_iter()
         .flat_map(|task_group| task_group.tasks)
         .flat_map(|task| task.services)

@@ -251,7 +251,7 @@ pub async fn mock_get_nomad_service_by_name(server: &mut ServerGuard) -> mockito
               "VaultToken": "",
               "Version": 0
           }
-            "#
+            "#,
         )
         .create_async()
         .await
