@@ -21,6 +21,7 @@ async fn main() {
             return;
         }
     };
+    println!("Configuration parsed successfully");
 
     // Initialize Consul Client
     let consul_client = loop {
@@ -35,12 +36,14 @@ async fn main() {
             }
         }
     };
+    println!("Consul client created successfully");
 
     // Acquire Lock
     if let Err(e) = consul_client.acquire_lock().await {
         eprintln!("Failed to acquire Consul lock: {}", e);
         return;
     }
+    println!("Consul lock acquired successfully");
 
     let nomad_tag = match nomad::fetch_and_parse_service_tags(&config).await {
         Ok(tag) => tag,
@@ -49,6 +52,7 @@ async fn main() {
             return;
         }
     };
+    println!("Nomad DNS tags fetched successfully");
 
     let dns_provider: Box<dyn DnsProviderTrait> = match config.dns_provider {
         DnsProvider::Hetzner(config) => Box::new(hetzner_dns::HetznerDns { config }),
