@@ -47,7 +47,7 @@ pub async fn fetch_and_parse_service_tags(config: &Config) -> Result<NomadDnsTag
     let response = client
         .get(format!(
             "{}:{}/v1/job/{}",
-            config.nomad_hostname, config.nomad_port, config.nomad_service_name
+            config.nomad_hostname, config.nomad_port, config.nomad_job_name
         ))
         .send()
         .await?

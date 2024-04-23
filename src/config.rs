@@ -11,12 +11,12 @@ pub enum DnsProvider {
 #[derive(Debug, Parser)]
 #[command(author, about, version)]
 pub struct Config {
-    /// Specifies the service name in Nomad.
+    /// Specifies the job name in Nomad.
     #[arg(long)]
-    pub nomad_service_name: String,
+    pub nomad_job_name: String,
 
     /// Specifies the Nomad server hostname. Defaults to "localhost".
-    #[arg(long, default_value = "localhost")]
+    #[arg(long, default_value = "http://127.0.0.1")]
     pub nomad_hostname: String,
 
     /// Specifies the port number for the Nomad server. Defaults to 4646.
