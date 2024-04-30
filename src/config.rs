@@ -11,18 +11,6 @@ pub enum DnsProvider {
 #[derive(Debug, Parser)]
 #[command(author, about, version)]
 pub struct Config {
-    /// Specifies the job name in Nomad.
-    #[arg(long)]
-    pub nomad_job_name: String,
-
-    /// Specifies the Nomad server hostname. Defaults to "localhost".
-    #[arg(long, default_value = "http://127.0.0.1")]
-    pub nomad_hostname: String,
-
-    /// Specifies the port number for the Nomad server. Defaults to 4646.
-    #[arg(long, default_value = "4646")]
-    pub nomad_port: String,
-
     /// Specifies the address of the Consul server. Defaults to "http://127.0.0.1:8500".
     #[arg(long, default_value = "http://127.0.0.1:8500")]
     pub consul_address: String,

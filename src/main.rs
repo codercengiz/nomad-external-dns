@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use clap::Parser;
 
-use nomad_external_dns::{hetzner_dns, nomad};
+use nomad_external_dns::hetzner_dns;
 use reqwest::Url;
 use tokio::time::sleep;
 
@@ -45,28 +45,47 @@ async fn main() {
     }
     println!("Consul lock acquired successfully");
 
-    let nomad_tag = match nomad::fetch_and_parse_service_tags(&config).await {
-        Ok(tag) => tag,
+    println!("Fetching DNS tags from the services in Consul");
+    let dns_tags = match consul_client.fetch_service_tags().await {
+        Ok(tags) => tags,
         Err(e) => {
-            eprintln!("Failed to fetch Nomad DNS tags: {}", e);
+            eprintln!("Failed to fetch Consul DNS tags: {}", e);
             return;
         }
     };
-    println!("Nomad DNS tags fetched successfully");
+
+    println!(
+        "Consul DNS tags fetched successfully. Length: {}",
+        dns_tags.len()
+    );
 
     let dns_provider: Box<dyn DnsProviderTrait> = match config.dns_provider {
         DnsProvider::Hetzner(config) => Box::new(hetzner_dns::HetznerDns { config }),
     };
 
-    let result = dns_provider.update_or_create_dns_record(&nomad_tag).await;
+    // Update or create DNS record for every dns tag
+    let mut all_success = true;
+    for dns_tag in dns_tags {
+        match dns_provider.update_or_create_dns_record(&dns_tag).await {
+            Ok(_) => println!("DNS record updated or created successfully"),
+            Err(e) => {
+                eprintln!(
+                    "Failed to update or create DNS record for {}: {}",
+                    dns_tag.hostname, e
+                );
+                all_success = false;
+            }
+        }
+    }
 
     // Release Lock
     if consul_client.drop_lock().await.is_err() {
         eprintln!("Failed to release Consul lock");
     }
 
-    match result {
-        Ok(_) => println!("DNS record updated or created successfully"),
-        Err(e) => eprintln!("Failed to update or create DNS record: {}", e),
+    if all_success {
+        println!("Successfully updated or created all DNS records.");
+    } else {
+        eprintln!("Some DNS updates or creations failed.");
     }
 }

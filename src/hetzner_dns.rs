@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::HetznerConfig,
+    consul,
     dns_trait::{DnsProviderTrait, DnsRecord, DnsRecordCreate},
-    nomad::NomadDnsTag,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,12 +19,12 @@ pub struct HetznerDns {
 
 #[async_trait]
 impl DnsProviderTrait for HetznerDns {
-    /// Update or create a DNS record based on the NomadDnsTag
+    /// Update or create a DNS record based on the Consul service tags
     /// If the record already exists, it will be updated if the value or ttl is different
     /// If the record does not exist, it will be created
     async fn update_or_create_dns_record<'a>(
         &self,
-        nomad_tag: &'a NomadDnsTag,
+        dns_record: &'a consul::DnsRecord,
     ) -> Result<(), anyhow::Error> {
         let existing_records = match list_dns_records(&self.config).await {
             Ok(records) => records,
@@ -36,19 +36,19 @@ impl DnsProviderTrait for HetznerDns {
 
         let matched_record = existing_records
             .iter()
-            .find(|record| record.name == nomad_tag.hostname && record.type_ == nomad_tag.type_);
+            .find(|record| record.name == dns_record.hostname && record.type_ == dns_record.type_);
 
         match matched_record {
             Some(record) => {
-                if record.value != nomad_tag.value || record.ttl != nomad_tag.ttl {
+                if record.value != dns_record.value || record.ttl != dns_record.ttl {
                     // Update the existing record
                     let updated_record = DnsRecord {
                         id: record.id.clone(),
                         zone_id: record.zone_id.clone(),
-                        type_: nomad_tag.type_.clone(),
-                        name: nomad_tag.hostname.clone(),
-                        value: nomad_tag.value.clone(),
-                        ttl: nomad_tag.ttl,
+                        type_: dns_record.type_.clone(),
+                        name: dns_record.hostname.clone(),
+                        value: dns_record.value.clone(),
+                        ttl: dns_record.ttl,
                     };
                     update_dns_record(&self.config, &updated_record).await?;
                     Ok(())
@@ -60,10 +60,10 @@ impl DnsProviderTrait for HetznerDns {
                 // Create a new DNS record
                 let new_record = DnsRecordCreate {
                     zone_id: self.config.dns_zone_id.clone(),
-                    type_: nomad_tag.type_.clone(),
-                    name: nomad_tag.hostname.clone(),
-                    value: nomad_tag.value.clone(),
-                    ttl: nomad_tag.ttl,
+                    type_: dns_record.type_.clone(),
+                    name: dns_record.hostname.clone(),
+                    value: dns_record.value.clone(),
+                    ttl: dns_record.ttl,
                 };
                 create_dns_record(&self.config, &new_record).await?;
                 Ok(())
