@@ -1,6 +1,7 @@
 use anyhow::Result;
-use reqwest::Url;
+use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::HashMap,
     time::{Duration, Instant, SystemTime},
@@ -10,9 +11,10 @@ use tokio::time::sleep;
 use crate::dns_trait::DnsType;
 
 /// A DNS record based on the tags of a service in Consul
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Hash)]
 pub struct DnsRecord {
     pub hostname: String,
+    #[serde(rename = "type")]
     pub type_: DnsType,
     pub ttl: Option<i32>,
     pub value: String,
@@ -34,16 +36,19 @@ impl ConsulLock {
 pub struct ConsulClient {
     pub http_client: reqwest::Client,
     pub kv_api_base_url: Url,
+    pub catalog_api_base_url: Url,
     pub datacenter: Option<String>,
 }
 
 impl ConsulClient {
     pub fn new(consul_address: Url, consul_datacenter: Option<String>) -> Result<ConsulClient> {
         let kv_api_base_url = consul_address.join("v1/")?.join("kv/")?;
+        let catalog_api_base_url = consul_address.join("v1/")?.join("catalog/")?;
         let client = reqwest::Client::builder().build()?;
         Ok(ConsulClient {
             http_client: client,
             kv_api_base_url,
+            catalog_api_base_url,
             datacenter: consul_datacenter,
         })
     }
@@ -108,7 +113,7 @@ impl ConsulClient {
 
     /// Retrieves a list of all registered services and parses their tags into DnsTag
     pub async fn fetch_service_tags(&self) -> Result<Vec<DnsRecord>, anyhow::Error> {
-        let mut services_url = self.kv_api_base_url.join("catalog/")?.join("services")?;
+        let mut services_url = self.catalog_api_base_url.join("services")?;
 
         // Set dc if it is provided in the config
         if let Some(dc) = &self.datacenter {
@@ -136,6 +141,66 @@ impl ConsulClient {
             .collect();
 
         Ok(dns_tags)
+    }
+
+    /// Stores a single DNS record in Consul.
+    /// This function fetches the current state of DNS records, updates it with the new record,
+    /// and then re-stores the updated state back into Consul.
+    pub async fn store_dns_record(
+        &self,
+        provider_record_id: String,
+        dns_record: &DnsRecord,
+    ) -> Result<()> {
+        let mut records = self.fetch_all_dns_records().await?;
+        records.insert(provider_record_id, dns_record.clone());
+        self.store_all_dns_records(&records).await
+    }
+
+    /// Deletes a single DNS record from Consul.
+    /// This function fetches the current DNS records, removes the specified record, and then updates
+    /// the store in Consul.
+    pub async fn delete_dns_record(&self, record_id: &str) -> Result<(), anyhow::Error> {
+        let mut records = self.fetch_all_dns_records().await?;
+        if records.remove(record_id).is_some() {
+            self.store_all_dns_records(&records).await
+        } else {
+            Err(anyhow::anyhow!("Record not found"))
+        }
+    }
+
+    // Store all DNS records under a single key as a HashMap
+    async fn store_all_dns_records(&self, records: &HashMap<String, DnsRecord>) -> Result<()> {
+        let url = self.kv_api_base_url.join("dns_records")?;
+        let json_data = json!(records);
+        self.http_client
+            .put(url)
+            .json(&json_data)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// Fetches all DNS records from Consul.
+    /// This function retrieves the state of all DNS records stored under a specific Consul key.
+    pub async fn fetch_all_dns_records(&self) -> Result<HashMap<String, DnsRecord>> {
+        let url = self.kv_api_base_url.join("dns_records")?;
+        let resp = self.http_client.get(url).send().await?;
+
+        if resp.status().is_success() {
+            return Ok(resp.json::<HashMap<String, DnsRecord>>().await?);
+        } else {
+            // If the key does not exist, return an empty HashMap
+            if resp.status() == StatusCode::NOT_FOUND {
+                return Ok(HashMap::new());
+            }
+
+            // Otherwise, return an error
+            return Err(anyhow::anyhow!(
+                "Failed to fetch DNS records: {}",
+                resp.status()
+            ));
+        }
     }
 }
 

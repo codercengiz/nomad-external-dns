@@ -13,6 +13,11 @@ pub struct RecordsWrapper {
     records: Vec<DnsRecord>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct RecordResponse {
+    record: DnsRecord,
+}
+
 pub struct HetznerDns {
     pub config: HetznerConfig,
 }
@@ -25,7 +30,7 @@ impl DnsProviderTrait for HetznerDns {
     async fn update_or_create_dns_record<'a>(
         &self,
         dns_record: &'a consul::DnsRecord,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<DnsRecord, anyhow::Error> {
         let existing_records = match list_dns_records(&self.config).await {
             Ok(records) => records,
             Err(e) => {
@@ -50,10 +55,10 @@ impl DnsProviderTrait for HetznerDns {
                         value: dns_record.value.clone(),
                         ttl: dns_record.ttl,
                     };
-                    update_dns_record(&self.config, &updated_record).await?;
-                    Ok(())
+                    let updated_record = update_dns_record(&self.config, &updated_record).await?;
+                    Ok(updated_record)
                 } else {
-                    Ok(())
+                    Ok(record.clone())
                 }
             }
             None => {
@@ -65,10 +70,22 @@ impl DnsProviderTrait for HetznerDns {
                     value: dns_record.value.clone(),
                     ttl: dns_record.ttl,
                 };
-                create_dns_record(&self.config, &new_record).await?;
-                Ok(())
+                let created_record = create_dns_record(&self.config, &new_record).await?;
+                Ok(created_record)
             }
         }
+    }
+
+    async fn delete_dns_record<'a>(&self, record_id: &'a str) -> Result<(), anyhow::Error> {
+        let url = format!("{}/records/{}", &self.config.api_url, record_id);
+        let client = Client::new();
+        client
+            .delete(url)
+            .header("Auth-API-Token", &self.config.dns_token)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
     }
 }
 
@@ -98,7 +115,7 @@ async fn list_dns_records(hetzner_config: &HetznerConfig) -> Result<Vec<DnsRecor
 async fn update_dns_record(
     hetzner_config: &HetznerConfig,
     record: &DnsRecord,
-) -> Result<(), Error> {
+) -> Result<DnsRecord, Error> {
     let client = Client::new();
     let url = format!("{}/records/{}", &hetzner_config.api_url, &record.id);
     let res = client
@@ -108,14 +125,14 @@ async fn update_dns_record(
         .send()
         .await?;
 
-    res.error_for_status()?;
-    Ok(())
+    let updated_dns = res.json::<RecordResponse>().await?;
+    Ok(updated_dns.record)
 }
 
 async fn create_dns_record(
     hetzner_config: &HetznerConfig,
     record_create: &DnsRecordCreate,
-) -> Result<(), Error> {
+) -> Result<DnsRecord, Error> {
     let client = Client::new();
     let url = format!("{}/records", &hetzner_config.api_url);
     let res = client
@@ -123,8 +140,9 @@ async fn create_dns_record(
         .header("Auth-API-Token", &hetzner_config.dns_token)
         .json(record_create)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
 
-    res.error_for_status()?;
-    Ok(())
+    let created_dns = res.json::<RecordResponse>().await?;
+    Ok(created_dns.record)
 }

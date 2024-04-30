@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::consul;
 
 // convert dnstag type to an enum
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Hash)]
 pub enum DnsType {
     A,
     AAAA,
@@ -30,7 +30,9 @@ pub trait DnsProviderTrait {
     async fn update_or_create_dns_record<'a>(
         &self,
         dns_record: &'a consul::DnsRecord,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<DnsRecord, anyhow::Error>;
+
+    async fn delete_dns_record<'a>(&self, record_id: &'a str) -> Result<(), anyhow::Error>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
