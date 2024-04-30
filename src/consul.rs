@@ -112,12 +112,22 @@ impl ConsulClient {
     }
 
     /// Retrieves a list of all registered services and parses their tags into DnsTag
-    pub async fn fetch_service_tags(&self) -> Result<Vec<DnsRecord>, anyhow::Error> {
+    pub async fn fetch_service_tags(
+        &self,
+        consul_index: &mut Option<u64>,
+    ) -> Result<Vec<DnsRecord>, anyhow::Error> {
         let mut services_url = self.catalog_api_base_url.join("services")?;
 
         // Set dc if it is provided in the config
         if let Some(dc) = &self.datacenter {
             services_url.query_pairs_mut().append_pair("dc", dc);
+        }
+
+        if let Some(index) = consul_index {
+            services_url
+                .query_pairs_mut()
+                .append_pair("index", &index.to_string());
+            services_url.query_pairs_mut().append_pair("wait", "100s");
         }
 
         // Add a filter to only match "normal" Consul services
@@ -126,16 +136,22 @@ impl ConsulClient {
             r#"ServiceKind == "" and ServiceTags contains "external-dns.enable=true""#,
         );
 
-        let response = self
-            .http_client
-            .get(services_url)
-            .send()
-            .await?
+        let response = self.http_client.get(services_url).send().await?;
+
+        if response.status().is_success() {
+            *consul_index = response
+                .headers()
+                .get("X-Consul-Index")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok());
+        }
+
+        let records = response
             .error_for_status()?
             .json::<HashMap<String, Vec<String>>>()
             .await?;
 
-        let dns_tags = response
+        let dns_tags = records
             .into_iter()
             .flat_map(|(_service_name, tags)| parse_dns_tags(tags))
             .collect();
