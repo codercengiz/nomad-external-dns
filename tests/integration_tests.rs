@@ -7,13 +7,13 @@ mod tests {
     use std::fs;
     use std::process::Command;
 
+    use consul_external_dns::config::HetznerConfig;
+    use consul_external_dns::config::{Config, DnsProvider};
+    use consul_external_dns::consul::{ConsulClient, DnsRecord};
+    use consul_external_dns::dns_trait::{DnsProviderTrait, DnsRecordCreate, DnsType};
+    use consul_external_dns::hetzner_dns::HetznerDns;
     use fake::Fake;
     use mockito::Server;
-    use nomad_external_dns::config::HetznerConfig;
-    use nomad_external_dns::config::{Config, DnsProvider};
-    use nomad_external_dns::consul::{ConsulClient, DnsRecord};
-    use nomad_external_dns::dns_trait::{DnsProviderTrait, DnsRecordCreate, DnsType};
-    use nomad_external_dns::hetzner_dns::HetznerDns;
     use reqwest::Url;
 
     use crate::fixtures::{self, EnvironmentManager};

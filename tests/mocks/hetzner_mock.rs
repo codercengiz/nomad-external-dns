@@ -1,5 +1,5 @@
+use consul_external_dns::dns_trait::DnsRecordCreate;
 use mockito::{Matcher, ServerGuard};
-use nomad_external_dns::dns_trait::DnsRecordCreate;
 
 pub async fn mock_create_dns_record(
     server: &mut ServerGuard,

@@ -1,4 +1,4 @@
-name: Build and Publish Nomad-External-DNS
+name: Build and Publish Consul-External-DNS
 
 on:
   push:
@@ -36,7 +36,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/nomad_external_dns
+          path: target/${{ matrix.target }}/release/consul_external_dns
 
   publish:
       needs: build
@@ -90,15 +90,15 @@ jobs:
             path: target/arm-unknown-linux-musleabihf/release
 
         - name: podman build linux/arm64
-          run: podman build --format docker --platform linux/arm64/v8 --manifest nomad-external-dns -f Containerfile target/aarch64-unknown-linux-gnu/release
+          run: podman build --format docker --platform linux/arm64/v8 --manifest consul-external-dns -f Containerfile target/aarch64-unknown-linux-gnu/release
 
         - name: podman build linux/amd64
-          run: podman build --format docker --platform linux/amd64 --manifest nomad-external-dns -f Containerfile target/x86_64-unknown-linux-gnu/release
+          run: podman build --format docker --platform linux/amd64 --manifest consul-external-dns -f Containerfile target/x86_64-unknown-linux-gnu/release
 
         - name: podman build linux/arm
-          run: podman build --format docker --platform linux/arm/v7 --manifest nomad-external-dns -f Containerfile target/armv7-unknown-linux-gnueabihf/release
+          run: podman build --format docker --platform linux/arm/v7 --manifest consul-external-dns -f Containerfile target/armv7-unknown-linux-gnueabihf/release
 
         - name: Push Images
           run: |
-            podman manifest push nomad-external-dns ghcr.io/codercengiz/nomad-external-dns:latest
+            podman manifest push consul-external-dns ghcr.io/codercengiz/consul-external-dns:latest
 

@@ -1,2 +1,2 @@
-# nomad-external-dns
-Nomad External DNS 
+# consul-external-dns
+Consul External DNS 

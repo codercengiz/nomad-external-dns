@@ -2,6 +2,6 @@
 FROM docker.io/archlinux
 RUN pacman -Syu --noconfirm && \
     pacman -S --noconfirm gcc libsodium
-COPY ./target/release/nomad_external_dns /app/nomad_external_dns
-RUN chmod 755 /app/nomad_external_dns
-ENTRYPOINT ["/app/nomad_external_dns"]
+COPY ./target/release/consul_external_dns /app/consul_external_dns
+RUN chmod 755 /app/consul_external_dns
+ENTRYPOINT ["/app/consul_external_dns"]

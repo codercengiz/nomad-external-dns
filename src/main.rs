@@ -2,17 +2,17 @@ use std::time::Duration;
 
 use clap::Parser;
 
-use nomad_external_dns::hetzner_dns;
+use consul_external_dns::hetzner_dns;
 use reqwest::Url;
 use tokio::time::sleep;
 
-use nomad_external_dns::config::{Config, DnsProvider};
-use nomad_external_dns::consul::ConsulClient;
-use nomad_external_dns::dns_trait::DnsProviderTrait;
+use consul_external_dns::config::{Config, DnsProvider};
+use consul_external_dns::consul::ConsulClient;
+use consul_external_dns::dns_trait::DnsProviderTrait;
 
 #[tokio::main]
 async fn main() {
-    println!("Starting up Nomad External DNS");
+    println!("Starting up Consul External DNS");
 
     let config = match Config::try_parse() {
         Ok(config) => config,
