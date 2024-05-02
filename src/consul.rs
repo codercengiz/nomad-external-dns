@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -31,6 +32,12 @@ impl ConsulLock {
             locked_at: SystemTime::now(),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ConsulKVResponse {
+    #[serde(rename = "Value")]
+    value: Option<String>,
 }
 
 pub struct ConsulClient {
@@ -203,25 +210,43 @@ impl ConsulClient {
         let url = self.kv_api_base_url.join("dns_records")?;
         let resp = self.http_client.get(url).send().await?;
 
-        if resp.status().is_success() {
-            return Ok(resp.json::<HashMap<String, DnsRecord>>().await?);
-        } else {
-            // If the key does not exist, return an empty HashMap
+        let mut records: HashMap<String, DnsRecord> = HashMap::new();
+        if !resp.status().is_success() {
+            eprintln!("Failed to fetch DNS records: {}", resp.status());
             if resp.status() == StatusCode::NOT_FOUND {
-                return Ok(HashMap::new());
+                return Ok(records);
             }
-
-            // Otherwise, return an error
             return Err(anyhow::anyhow!(
                 "Failed to fetch DNS records: {}",
                 resp.status()
             ));
         }
+
+        let body = resp.bytes().await?;
+
+        let kv_response: Vec<ConsulKVResponse> = serde_json::from_slice(&body)
+            .map_err(|e| anyhow::anyhow!("Failed to decode KV response: {}", e))?;
+
+        for entry in kv_response {
+            if let Some(encoded_value) = entry.value {
+                let decoded_bytes = &BASE64_STANDARD
+                    .decode(encoded_value)
+                    .expect("Can't decode base64");
+
+                // Deserialize the JSON string to a HashMap<String, DnsRecord>
+                let record_map: HashMap<String, DnsRecord> = serde_json::from_slice(decoded_bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize DnsRecord: {}", e))?;
+
+                records.extend(record_map);
+            }
+        }
+
+        Ok(records)
     }
 }
 
 fn parse_dns_tags(tags: Vec<String>) -> Vec<DnsRecord> {
-    const PREFIX: &'static str = "external-dns.";
+    const PREFIX: &str = "external-dns.";
     // Parse service tags of the format `external-dns.<field>=<value>`.
     let mut dns_tags: HashMap<String, HashMap<String, String>> = HashMap::new();
     for tag in tags.into_iter() {
