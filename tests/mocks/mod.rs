@@ -1,2 +1,2 @@
+pub mod consul_mock;
 pub mod hetzner_mock;
-pub mod nomad_mock;

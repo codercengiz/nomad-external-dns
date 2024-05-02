@@ -1,21 +1,30 @@
 use mockito::{Matcher, ServerGuard};
+use nomad_external_dns::dns_trait::DnsRecordCreate;
 
 pub async fn mock_create_dns_record(
     server: &mut ServerGuard,
-    matcher_body: Option<&str>,
+    create_dns_record: &DnsRecordCreate,
+    create_dns_record_id: &str,
 ) -> mockito::Mock {
     print!("Mocking create DNS record");
-    let matcher = match matcher_body {
-        Some(body) => body.into(),
-        None => Matcher::Any,
-    };
+
+    let matcher_body = Matcher::JsonString(serde_json::to_string(&create_dns_record).unwrap());
+
+    let expected_body = format!(
+        r#"{{"record":{{"type":"{}","id":"{}","created":"","modified":"","zone_id":"string","name":"{}","value":"{}","ttl":{}}}}}"#,
+        create_dns_record.type_,
+        create_dns_record_id,
+        create_dns_record.name,
+        create_dns_record.value,
+        create_dns_record.ttl.unwrap_or(0)
+    );
 
     server
         .mock("POST", "/records")
         .match_header("Auth-API-Token", Matcher::Any)
-        .match_body(matcher)
+        .match_body(matcher_body)
         .with_status(201)
-        .with_body(r#"{"id":"new_dns_record_id","message":"DNS record created"}"#)
+        .with_body(expected_body)
         .create_async()
         .await
 }

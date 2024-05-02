@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +23,17 @@ impl std::str::FromStr for DnsType {
             "AAAA" => Ok(DnsType::AAAA),
             "CNAME" => Ok(DnsType::CNAME),
             _ => Err(format!("Invalid DNS type: {}", s)),
+        }
+    }
+}
+
+// implement Display for DnsType
+impl Display for DnsType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DnsType::A => write!(f, "A"),
+            DnsType::AAAA => write!(f, "AAAA"),
+            DnsType::CNAME => write!(f, "CNAME"),
         }
     }
 }
