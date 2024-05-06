@@ -40,10 +40,10 @@ impl Display for DnsType {
 
 #[async_trait]
 pub trait DnsProviderTrait {
-    async fn update_or_create_dns_record<'a>(
+    async fn create_dns_record<'a>(
         &self,
         dns_record: &'a consul::DnsRecord,
-    ) -> Result<DnsRecord, anyhow::Error>;
+    ) -> Result<String, anyhow::Error>;
 
     async fn delete_dns_record<'a>(&self, record_id: &'a str) -> Result<(), anyhow::Error>;
 }
@@ -51,16 +51,6 @@ pub trait DnsProviderTrait {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DnsRecord {
     pub id: String,
-    pub zone_id: String,
-    #[serde(rename = "type")]
-    pub type_: DnsType,
-    pub name: String,
-    pub value: String,
-    pub ttl: Option<i32>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DnsRecordCreate {
     pub zone_id: String,
     #[serde(rename = "type")]
     pub type_: DnsType,

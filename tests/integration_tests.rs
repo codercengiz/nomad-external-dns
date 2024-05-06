@@ -10,7 +10,7 @@ mod tests {
     use consul_external_dns::config::HetznerConfig;
     use consul_external_dns::config::{Config, DnsProvider};
     use consul_external_dns::consul::{ConsulClient, DnsRecord};
-    use consul_external_dns::dns_trait::{DnsProviderTrait, DnsRecordCreate, DnsType};
+    use consul_external_dns::dns_trait::{self, DnsProviderTrait, DnsType};
     use consul_external_dns::hetzner_dns::HetznerDns;
     use fake::Fake;
     use mockito::Server;
@@ -30,14 +30,15 @@ mod tests {
             api_url: server.url(),
         };
         let hetzner_dns = HetznerDns { config };
-        let nomad_tag = DnsRecord {
+        let consul_dns_record = DnsRecord {
             hostname: "new.example.com".to_string(),
             type_: DnsType::A,
             value: "192.168.0.1".to_string(),
             ttl: Some(300),
         };
 
-        let expected_dns_record_create = DnsRecordCreate {
+        let expected_dns_record = dns_trait::DnsRecord {
+            id: "fake_record_id".to_string(),
             zone_id: "fake_zone_id".to_string(),
             type_: DnsType::A,
             name: "new.example.com".to_string(),
@@ -46,15 +47,11 @@ mod tests {
         };
 
         // convert the expected_dns_record_create to a JSON string
-        let create_mock = hetzner_mock::mock_create_dns_record(
-            &mut server,
-            &expected_dns_record_create,
-            "fake_record_id",
-        )
-        .await;
+        let create_mock =
+            hetzner_mock::mock_create_dns_record(&mut server, &expected_dns_record).await;
         hetzner_mock::mock_get_dns_records(&mut server, "fake_zone_id", "fake_token").await;
 
-        let result = hetzner_dns.update_or_create_dns_record(&nomad_tag).await;
+        let result = hetzner_dns.create_dns_record(&consul_dns_record).await;
         create_mock.assert();
         assert!(result.is_ok());
     }
@@ -133,7 +130,9 @@ mod tests {
 
         let mut mock_hetzner_server = Server::new_async().await;
 
-        let dns_record_create_1 = DnsRecordCreate {
+        let random_dns_record_id_1: String = (10..20).fake();
+        let dns_record_create_1 = dns_trait::DnsRecord {
+            id: random_dns_record_id_1,
             zone_id: "test_zone_id".to_string(),
             type_: DnsType::A,
             name: "abc-def-xyz".to_string(),
@@ -141,7 +140,9 @@ mod tests {
             ttl: None,
         };
 
-        let dns_record_create_2 = DnsRecordCreate {
+        let random_dns_record_id_2: String = (10..20).fake();
+        let dns_record_create_2 = dns_trait::DnsRecord {
+            id: random_dns_record_id_2,
             zone_id: "test_zone_id".to_string(),
             type_: DnsType::AAAA,
             name: "def-xyz".to_string(),
@@ -150,21 +151,13 @@ mod tests {
         };
 
         let job_name: String = (5..10).fake();
-        let random_dns_record_id_1: String = (10..20).fake();
-        let random_dns_record_id_2: String = (10..20).fake();
 
-        let create_mock_1 = hetzner_mock::mock_create_dns_record(
-            &mut mock_hetzner_server,
-            &dns_record_create_1,
-            &random_dns_record_id_1,
-        )
-        .await;
-        let create_mock_2 = hetzner_mock::mock_create_dns_record(
-            &mut mock_hetzner_server,
-            &dns_record_create_2,
-            &random_dns_record_id_2,
-        )
-        .await;
+        let create_mock_1 =
+            hetzner_mock::mock_create_dns_record(&mut mock_hetzner_server, &dns_record_create_1)
+                .await;
+        let create_mock_2 =
+            hetzner_mock::mock_create_dns_record(&mut mock_hetzner_server, &dns_record_create_2)
+                .await;
         hetzner_mock::mock_get_dns_records(&mut mock_hetzner_server, "test_zone_id", "test_token")
             .await;
 
@@ -209,7 +202,7 @@ mod tests {
     }
 
     fn create_nomad_job_file_from_template(
-        dns_records: &[DnsRecordCreate],
+        dns_records: &[dns_trait::DnsRecord],
         job_name: &str,
         enable: bool,
     ) -> Result<String, std::io::Error> {

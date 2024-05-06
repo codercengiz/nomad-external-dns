@@ -80,11 +80,8 @@ async fn main() {
         for fetched_dns_record in &fetched_dns_records {
             if !dns_state.values().any(|r| r == fetched_dns_record) {
                 // Create the record on the DNS provider
-                let record = match dns_provider
-                    .update_or_create_dns_record(fetched_dns_record)
-                    .await
-                {
-                    Ok(record) => record,
+                let record_id = match dns_provider.create_dns_record(fetched_dns_record).await {
+                    Ok(record_id) => record_id,
                     Err(e) => {
                         eprintln!("Failed to update or create DNS record: {}", e);
                         all_success = false;
@@ -94,7 +91,7 @@ async fn main() {
 
                 // Store the record in Consul
                 match consul_client
-                    .store_dns_record(record.id, fetched_dns_record)
+                    .store_dns_record(record_id, fetched_dns_record)
                     .await
                 {
                     Ok(_) => println!("DNS record stored in Consul"),
@@ -110,13 +107,10 @@ async fn main() {
                 .any(|fetched_record| fetched_record == record)
             {
                 // Delete the record from the DNS provider
-                match dns_provider.delete_dns_record(record_id).await {
-                    Ok(_) => (),
-                    Err(e) => {
-                        eprintln!("Failed to delete DNS record: {}", e);
-                        all_success = false;
-                        continue;
-                    }
+                if let Err(e) = dns_provider.delete_dns_record(record_id).await {
+                    eprintln!("Failed to delete DNS record: {}", e);
+                    all_success = false;
+                    continue;
                 };
 
                 // Delete the record from Consul state

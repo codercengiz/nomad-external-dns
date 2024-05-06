@@ -1,23 +1,15 @@
-use consul_external_dns::dns_trait::DnsRecordCreate;
+use consul_external_dns::dns_trait::DnsRecord;
 use mockito::{Matcher, ServerGuard};
 
 pub async fn mock_create_dns_record(
     server: &mut ServerGuard,
-    create_dns_record: &DnsRecordCreate,
-    create_dns_record_id: &str,
+    create_dns_record: &DnsRecord,
 ) -> mockito::Mock {
     print!("Mocking create DNS record");
 
-    let matcher_body = Matcher::JsonString(serde_json::to_string(&create_dns_record).unwrap());
+    let matcher_body = Matcher::JsonString(get_matcher_body(create_dns_record));
 
-    let expected_body = format!(
-        r#"{{"record":{{"type":"{}","id":"{}","created":"","modified":"","zone_id":"string","name":"{}","value":"{}","ttl":{}}}}}"#,
-        create_dns_record.type_,
-        create_dns_record_id,
-        create_dns_record.name,
-        create_dns_record.value,
-        create_dns_record.ttl.unwrap_or(0)
-    );
+    let expected_body = get_expected_body(create_dns_record);
 
     server
         .mock("POST", "/records")
@@ -45,4 +37,38 @@ pub async fn mock_get_dns_records(
         )
         .create_async()
         .await
+}
+
+fn get_expected_body(dns_record: &DnsRecord) -> String {
+    match dns_record.ttl {
+        Some(ttl) => {
+            format!(
+                r#"{{"record":{{"type":"{}","id":"{}","created":"","modified":"","zone_id":"string","name":"{}","value":"{}","ttl":{}}}}}"#,
+                dns_record.type_, dns_record.id, dns_record.name, dns_record.value, ttl
+            )
+        }
+        None => {
+            format!(
+                r#"{{"record":{{"type":"{}","id":"{}","created":"","modified":"","zone_id":"string","name":"{}","value":"{}", "ttl":0}}}}"#,
+                dns_record.type_, dns_record.id, dns_record.name, dns_record.value
+            )
+        }
+    }
+}
+
+fn get_matcher_body(dns_record: &DnsRecord) -> String {
+    match dns_record.ttl {
+        Some(ttl) => {
+            format!(
+                r#"{{"type":"{}","zone_id":"{}","name":"{}","value":"{}","ttl":{}}}"#,
+                dns_record.type_, dns_record.zone_id, dns_record.name, dns_record.value, ttl
+            )
+        }
+        None => {
+            format!(
+                r#"{{"type":"{}","zone_id":"{}","name":"{}","value":"{}","ttl":null}}"#,
+                dns_record.type_, dns_record.zone_id, dns_record.name, dns_record.value
+            )
+        }
+    }
 }
