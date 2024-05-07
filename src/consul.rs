@@ -5,11 +5,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::HashMap,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
-use tokio::time::sleep;
+use tokio::time::{interval, MissedTickBehavior};
+use uuid::Uuid;
 
 use crate::dns_trait::DnsType;
+
+#[derive(serde::Serialize)]
+struct CreateSessionRequest {
+    #[serde(rename = "Name")]
+    name: &'static str,
+    #[serde(rename = "Behavior")]
+    behavior: &'static str,
+    /// How long the session will survive without being renewed.
+    #[serde(rename = "TTL")]
+    ttl: &'static str,
+    /// How long the locks held by this session should keep being held after the session
+    /// has expired.
+    #[serde(rename = "LockDelay")]
+    lock_delay: &'static str,
+}
+#[derive(Deserialize, Debug)]
+struct CreateSessionResponse {
+    #[serde(rename = "ID")]
+    id: Uuid,
+}
 
 /// A DNS record based on the tags of a service in Consul
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Hash)]
@@ -26,24 +47,22 @@ struct ConsulLock {
     pub locked_at: SystemTime,
 }
 
-impl ConsulLock {
-    fn new() -> Self {
-        Self {
-            locked_at: SystemTime::now(),
-        }
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct ConsulKVResponse {
     #[serde(rename = "Value")]
     value: Option<String>,
+    #[serde(rename = "Key")]
+    key: String,
+    #[serde(rename = "Session")]
+    session: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct ConsulClient {
     pub http_client: reqwest::Client,
     pub kv_api_base_url: Url,
     pub catalog_api_base_url: Url,
+    pub session_api_base_url: Url,
     pub datacenter: Option<String>,
 }
 
@@ -51,34 +70,76 @@ impl ConsulClient {
     pub fn new(consul_address: Url, consul_datacenter: Option<String>) -> Result<ConsulClient> {
         let kv_api_base_url = consul_address.join("v1/")?.join("kv/")?;
         let catalog_api_base_url = consul_address.join("v1/")?.join("catalog/")?;
+        let session_api_base_url = consul_address.join("v1/")?.join("session/")?;
         let client = reqwest::Client::builder().build()?;
         Ok(ConsulClient {
             http_client: client,
             kv_api_base_url,
             catalog_api_base_url,
+            session_api_base_url,
             datacenter: consul_datacenter,
         })
+    }
+
+    /// Create a new session in Consul
+    /// This session is used to acquire a lock
+    pub async fn create_session(&self) -> Result<Uuid, anyhow::Error> {
+        let session_request = CreateSessionRequest {
+            name: "external-dns",
+            behavior: "release",
+            ttl: "30s",
+            lock_delay: "30s",
+        };
+
+        let mut session_url = self.session_api_base_url.join("create")?;
+        // Set dc if it is provided in the config
+        if let Some(dc) = &self.datacenter {
+            session_url.query_pairs_mut().append_pair("dc", dc);
+        }
+
+        let resp = self
+            .http_client
+            .put(session_url)
+            .json(&session_request)
+            .send()
+            .await?
+            .error_for_status()?;
+        let session_response: CreateSessionResponse = resp.json().await?;
+        Ok(session_response.id)
+    }
+
+    /// Renew the Consul session
+    pub async fn renew_session(&self, session_id: Uuid) -> Result<(), anyhow::Error> {
+        let mut session_url = self
+            .session_api_base_url
+            .join(&format!("renew/{}", session_id))?;
+
+        // Set dc if it is provided in the config
+        if let Some(dc) = &self.datacenter {
+            session_url.query_pairs_mut().append_pair("dc", dc);
+        }
+
+        self.http_client
+            .put(session_url)
+            .send()
+            .await?
+            .error_for_status()?;
+        println!("Renewed Consul session: {}", session_id);
+        Ok(())
     }
 
     /// Acquire a lock
     ///
     /// Times out after a while and returns an error if it does.
-    pub async fn acquire_lock(&self) -> Result<()> {
-        let consul_lock = ConsulLock::new();
-        let wait_time = Instant::now();
-        let timeout = Duration::from_secs(10);
+    pub async fn acquire_lock(&self, session_id: Uuid) -> Result<()> {
+        let mut interval = interval(Duration::from_secs(10));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
-            if wait_time.elapsed() > timeout {
-                println!("Timed out trying to acquire lock");
-                println!("Assuming poisoned lock, deleting last lock");
-                self.drop_lock().await?;
-            }
-
-            let mut lock_url = self.kv_api_base_url.join("consul_lock")?;
-
-            // Append 'cas=0' to ensure the lock is acquired only if the key does not already exist.
-            lock_url.query_pairs_mut().append_pair("cas", "0");
+            let mut lock_url = self.kv_api_base_url.join("service_lock")?;
+            lock_url
+                .query_pairs_mut()
+                .append_pair("acquire", &session_id.to_string());
 
             // Set dc if it is provided in the config
             if let Some(dc) = &self.datacenter {
@@ -88,7 +149,6 @@ impl ConsulClient {
             let resp = self
                 .http_client
                 .put(lock_url)
-                .json(&consul_lock)
                 .send()
                 .await?
                 .error_for_status()?;
@@ -96,10 +156,57 @@ impl ConsulClient {
 
             // If the lock is acquired, the response body will be "true"
             if body.starts_with("true") {
-                println!("Acquired Consul lock");
+                println!("=====> Acquired Consul lock");
                 return Ok(());
             }
-            sleep(Duration::from_millis(100)).await;
+
+            println!("=====> Failed to acquire Consul lock");
+            // We limit re-checks to at most every 10 seconds, so we don't spam the server in case we
+            // didn't acquire the lock even though it claims it to be free.
+            interval.tick().await;
+            // Wait for lock to be free
+            self.wait_for_lock("service_lock").await?;
+        }
+    }
+
+    async fn wait_for_lock(&self, key: &str) -> Result<(), anyhow::Error> {
+        let mut consul_index: Option<u64> = None;
+        loop {
+            println!("=====> waiting for the lock to be free");
+            let mut lock_url = self.kv_api_base_url.join(key)?;
+
+            // Set dc if it is provided in the config
+            if let Some(dc) = &self.datacenter {
+                lock_url.query_pairs_mut().append_pair("dc", dc);
+            }
+
+            if let Some(index) = consul_index.take() {
+                lock_url
+                    .query_pairs_mut()
+                    .append_pair("index", &index.to_string());
+            }
+
+            let response = self
+                .http_client
+                .get(lock_url)
+                .send()
+                .await?
+                .error_for_status()?;
+
+            consul_index = response
+                .headers()
+                .get("X-Consul-Index")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok());
+
+            let kvs = response.json::<Vec<ConsulKVResponse>>().await?;
+
+            for kv in kvs {
+                if kv.key == key && kv.session.is_none() {
+                    println!("=====> lock is free, returning");
+                    return Ok(());
+                }
+            }
         }
     }
 
@@ -212,14 +319,10 @@ impl ConsulClient {
 
         let mut records: HashMap<String, DnsRecord> = HashMap::new();
         if !resp.status().is_success() {
-            eprintln!("Failed to fetch DNS records: {}", resp.status());
             if resp.status() == StatusCode::NOT_FOUND {
                 return Ok(records);
             }
-            return Err(anyhow::anyhow!(
-                "Failed to fetch DNS records: {}",
-                resp.status()
-            ));
+            return Err(anyhow::anyhow!(resp.status()));
         }
 
         let body = resp.bytes().await?;

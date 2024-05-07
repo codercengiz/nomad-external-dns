@@ -1,14 +1,14 @@
 use clap::{Parser, Subcommand};
 
 /// Available DNS providers as subcommands, each with its own configuration options
-#[derive(Debug, Subcommand)]
+#[derive(Clone, Debug, Subcommand)]
 pub enum DnsProvider {
     /// Hetzner DNS provider configuration
     Hetzner(HetznerConfig),
 }
 
 /// Define a struct to hold all command-line arguments
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(author, about, version)]
 pub struct Config {
     /// Specifies the address of the Consul server. Defaults to "http://127.0.0.1:8500".
