@@ -39,7 +39,7 @@ impl DnsProviderTrait for HetznerDns {
         });
 
         let client = Client::new();
-        let url = format!("{}/records", &self.config.api_url);
+        let url = self.config.api_url.join("records")?;
         let res = client
             .post(url)
             .header("Auth-API-Token", &self.config.dns_token)
@@ -53,7 +53,10 @@ impl DnsProviderTrait for HetznerDns {
     }
 
     async fn delete_dns_record<'a>(&self, record_id: &'a str) -> Result<(), anyhow::Error> {
-        let url = format!("{}/records/{}", &self.config.api_url, record_id);
+        let url = self
+            .config
+            .api_url
+            .join(&format!("records/{}", record_id))?;
         let client = Client::new();
         client
             .delete(url)

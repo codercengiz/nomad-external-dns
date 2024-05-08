@@ -2,7 +2,6 @@ use anyhow::Result;
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::{
     collections::HashMap,
     time::{Duration, SystemTime},
@@ -11,6 +10,8 @@ use tokio::time::{interval, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::dns_trait::DnsType;
+
+const CONSUL_STORE_KEY: &str = "dns_records_lock";
 
 #[derive(serde::Serialize)]
 struct CreateSessionRequest {
@@ -64,6 +65,7 @@ pub struct ConsulClient {
     pub catalog_api_base_url: Url,
     pub session_api_base_url: Url,
     pub datacenter: Option<String>,
+    pub kv_dns_records: HashMap<String, DnsRecord>,
 }
 
 impl ConsulClient {
@@ -78,6 +80,7 @@ impl ConsulClient {
             catalog_api_base_url,
             session_api_base_url,
             datacenter: consul_datacenter,
+            kv_dns_records: HashMap::new(),
         })
     }
 
@@ -91,39 +94,34 @@ impl ConsulClient {
             lock_delay: "30s",
         };
 
-        let mut session_url = self.session_api_base_url.join("create")?;
+        let session_url = self.session_api_base_url.join("create")?;
+
+        let mut req = self.http_client.put(session_url).json(&session_request);
+
         // Set dc if it is provided in the config
         if let Some(dc) = &self.datacenter {
-            session_url.query_pairs_mut().append_pair("dc", dc);
+            req = req.query(&[("dc", dc)]);
         }
 
-        let resp = self
-            .http_client
-            .put(session_url)
-            .json(&session_request)
-            .send()
-            .await?
-            .error_for_status()?;
+        let resp = req.send().await?.error_for_status()?;
         let session_response: CreateSessionResponse = resp.json().await?;
         Ok(session_response.id)
     }
 
     /// Renew the Consul session
     pub async fn renew_session(&self, session_id: Uuid) -> Result<(), anyhow::Error> {
-        let mut session_url = self
+        let session_url = self
             .session_api_base_url
             .join(&format!("renew/{}", session_id))?;
 
+        let mut req = self.http_client.put(session_url);
+
         // Set dc if it is provided in the config
         if let Some(dc) = &self.datacenter {
-            session_url.query_pairs_mut().append_pair("dc", dc);
+            req = req.query(&[("dc", dc)]);
         }
 
-        self.http_client
-            .put(session_url)
-            .send()
-            .await?
-            .error_for_status()?;
+        req.send().await?.error_for_status()?;
         println!("Renewed Consul session: {}", session_id);
         Ok(())
     }
@@ -136,22 +134,17 @@ impl ConsulClient {
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
-            let mut lock_url = self.kv_api_base_url.join("service_lock")?;
-            lock_url
-                .query_pairs_mut()
-                .append_pair("acquire", &session_id.to_string());
+            let lock_url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
+
+            let mut req = self.http_client.put(lock_url);
+            req = req.query(&[("acquire", &session_id.to_string())]);
 
             // Set dc if it is provided in the config
             if let Some(dc) = &self.datacenter {
-                lock_url.query_pairs_mut().append_pair("dc", dc);
+                req = req.query(&[("dc", dc)]);
             }
 
-            let resp = self
-                .http_client
-                .put(lock_url)
-                .send()
-                .await?
-                .error_for_status()?;
+            let resp = req.send().await?;
             let body = resp.text().await?;
 
             // If the lock is acquired, the response body will be "true"
@@ -165,33 +158,27 @@ impl ConsulClient {
             // didn't acquire the lock even though it claims it to be free.
             interval.tick().await;
             // Wait for lock to be free
-            self.wait_for_lock("service_lock").await?;
+            self.wait_for_lock().await?;
         }
     }
 
-    async fn wait_for_lock(&self, key: &str) -> Result<(), anyhow::Error> {
+    async fn wait_for_lock(&self) -> Result<(), anyhow::Error> {
         let mut consul_index: Option<u64> = None;
         loop {
-            println!("=====> waiting for the lock to be free");
-            let mut lock_url = self.kv_api_base_url.join(key)?;
+            let lock_url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
+
+            let mut req = self.http_client.get(lock_url);
 
             // Set dc if it is provided in the config
             if let Some(dc) = &self.datacenter {
-                lock_url.query_pairs_mut().append_pair("dc", dc);
+                req = req.query(&[("dc", dc)]);
             }
 
             if let Some(index) = consul_index.take() {
-                lock_url
-                    .query_pairs_mut()
-                    .append_pair("index", &index.to_string());
+                req = req.query(&[("index", &index.to_string())]);
             }
 
-            let response = self
-                .http_client
-                .get(lock_url)
-                .send()
-                .await?
-                .error_for_status()?;
+            let response = req.send().await?;
 
             consul_index = response
                 .headers()
@@ -202,7 +189,7 @@ impl ConsulClient {
             let kvs = response.json::<Vec<ConsulKVResponse>>().await?;
 
             for kv in kvs {
-                if kv.key == key && kv.session.is_none() {
+                if kv.key == CONSUL_STORE_KEY && kv.session.is_none() {
                     println!("=====> lock is free, returning");
                     return Ok(());
                 }
@@ -210,60 +197,41 @@ impl ConsulClient {
         }
     }
 
-    /// Drop a lock
-    pub async fn drop_lock(&self) -> Result<()> {
-        let mut lock_url = self.kv_api_base_url.join("consul_lock")?;
-        if let Some(dc) = &self.datacenter {
-            lock_url.query_pairs_mut().append_pair("dc", dc);
-        }
-        self.http_client
-            .delete(lock_url)
-            .send()
-            .await?
-            .error_for_status()?;
-        println!("Dropped Consul lock");
-        Ok(())
-    }
-
     /// Retrieves a list of all registered services and parses their tags into DnsTag
     pub async fn fetch_service_tags(
         &self,
-        consul_index: &mut Option<u64>,
+        consul_index: &mut Option<String>,
     ) -> Result<Vec<DnsRecord>, anyhow::Error> {
-        let mut services_url = self.catalog_api_base_url.join("services")?;
+        let services_url = self.catalog_api_base_url.join("services")?;
+
+        let mut req = self.http_client.get(services_url);
 
         // Set dc if it is provided in the config
         if let Some(dc) = &self.datacenter {
-            services_url.query_pairs_mut().append_pair("dc", dc);
+            req = req.query(&[("dc", dc)]);
         }
 
         if let Some(index) = consul_index {
-            services_url
-                .query_pairs_mut()
-                .append_pair("index", &index.to_string());
-            services_url.query_pairs_mut().append_pair("wait", "100s");
+            req = req.query(&[("index", &index.to_string())]);
         }
 
         // Add a filter to only match "normal" Consul services
-        services_url.query_pairs_mut().append_pair(
+        req = req.query(&[(
             "filter",
             r#"ServiceKind == "" and ServiceTags contains "external-dns.enable=true""#,
-        );
+        )]);
 
-        let response = self.http_client.get(services_url).send().await?;
+        let response = req.send().await?.error_for_status()?;
 
-        if response.status().is_success() {
-            *consul_index = response
-                .headers()
-                .get("X-Consul-Index")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse().ok());
+        if let Some(index_header) = response.headers().get("X-Consul-Index") {
+            if let Ok(index_str) = index_header.to_str() {
+                let _ = consul_index.insert(index_str.to_string());
+            } else {
+                eprintln!("Failed to convert HeaderValue to string");
+            }
         }
 
-        let records = response
-            .error_for_status()?
-            .json::<HashMap<String, Vec<String>>>()
-            .await?;
+        let records = response.json::<HashMap<String, Vec<String>>>().await?;
 
         let dns_tags = records
             .into_iter()
@@ -277,50 +245,62 @@ impl ConsulClient {
     /// This function fetches the current state of DNS records, updates it with the new record,
     /// and then re-stores the updated state back into Consul.
     pub async fn store_dns_record(
-        &self,
+        &mut self,
         provider_record_id: String,
-        dns_record: &DnsRecord,
-    ) -> Result<()> {
-        let mut records = self.fetch_all_dns_records().await?;
-        records.insert(provider_record_id, dns_record.clone());
-        self.store_all_dns_records(&records).await
+        dns_record: DnsRecord,
+    ) -> Result<(), anyhow::Error> {
+        match self
+            .kv_dns_records
+            .insert(provider_record_id, dns_record.clone())
+        {
+            Some(_) => Err(anyhow::anyhow!("Unexpected record update")),
+            None => Ok(()),
+        }
     }
 
     /// Deletes a single DNS record from Consul.
     /// This function fetches the current DNS records, removes the specified record, and then updates
     /// the store in Consul.
-    pub async fn delete_dns_record(&self, record_id: &str) -> Result<(), anyhow::Error> {
-        let mut records = self.fetch_all_dns_records().await?;
-        if records.remove(record_id).is_some() {
-            self.store_all_dns_records(&records).await
+    pub async fn delete_dns_record(&mut self, record_id: &str) -> Result<(), anyhow::Error> {
+        if self.kv_dns_records.remove(record_id).is_some() {
+            Ok(())
         } else {
             Err(anyhow::anyhow!("Record not found"))
         }
     }
 
     // Store all DNS records under a single key as a HashMap
-    async fn store_all_dns_records(&self, records: &HashMap<String, DnsRecord>) -> Result<()> {
-        let url = self.kv_api_base_url.join("dns_records")?;
-        let json_data = json!(records);
-        self.http_client
-            .put(url)
-            .json(&json_data)
-            .send()
-            .await?
-            .error_for_status()?;
+    pub async fn store_all_dns_records(&self) -> Result<()> {
+        let url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
+
+        let mut req = self.http_client.put(url).json(&self.kv_dns_records);
+
+        // Set dc if it is provided in the config
+        if let Some(dc) = &self.datacenter {
+            req = req.query(&[("dc", dc)]);
+        }
+
+        req.send().await?.error_for_status()?;
         Ok(())
     }
 
     /// Fetches all DNS records from Consul.
     /// This function retrieves the state of all DNS records stored under a specific Consul key.
-    pub async fn fetch_all_dns_records(&self) -> Result<HashMap<String, DnsRecord>> {
-        let url = self.kv_api_base_url.join("dns_records")?;
-        let resp = self.http_client.get(url).send().await?;
+    pub async fn fetch_all_dns_records(&self) -> Result<HashMap<String, DnsRecord>, anyhow::Error> {
+        let url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
 
-        let mut records: HashMap<String, DnsRecord> = HashMap::new();
+        let mut req = self.http_client.get(url);
+
+        // Set dc if it is provided in the config
+        if let Some(dc) = &self.datacenter {
+            req = req.query(&[("dc", dc)]);
+        }
+
+        let resp = req.send().await?;
+
         if !resp.status().is_success() {
             if resp.status() == StatusCode::NOT_FOUND {
-                return Ok(records);
+                return Ok(HashMap::new());
             }
             return Err(anyhow::anyhow!(resp.status()));
         }
@@ -330,6 +310,7 @@ impl ConsulClient {
         let kv_response: Vec<ConsulKVResponse> = serde_json::from_slice(&body)
             .map_err(|e| anyhow::anyhow!("Failed to decode KV response: {}", e))?;
 
+        let mut records: HashMap<String, DnsRecord> = HashMap::new();
         for entry in kv_response {
             if let Some(encoded_value) = entry.value {
                 let decoded_bytes = &BASE64_STANDARD
@@ -374,14 +355,21 @@ fn parse_dns_tags(tags: Vec<String>) -> Vec<DnsRecord> {
             println!("Missing hostname for identifier: {}", identifier);
             continue;
         };
-        let type_: DnsType = match tags.remove("type").map(|t| t.parse()) {
+
+        let type_string = tags.remove("type");
+        let type_: DnsType = match type_string.as_ref().map(|t| t.parse()) {
             None => {
                 println!("Missing type for identifier: {}", identifier);
                 continue;
             }
             Some(Ok(t)) => t,
             Some(Err(e)) => {
-                eprintln!("Failed to parse type for identifier {}: {}", identifier, e);
+                eprintln!(
+                    "Unsupported record type {} specified for identifier {}: {}",
+                    type_string.unwrap_or_default(),
+                    identifier,
+                    e
+                );
                 continue;
             }
         };

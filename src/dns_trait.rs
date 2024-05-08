@@ -5,6 +5,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::consul;
 
+// Define an error type for unsupported DNS record types
+#[derive(Debug, Clone)]
+pub struct UnsupportedRecordType(String);
+
+impl Display for UnsupportedRecordType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unsupported DNS type: {}", self.0)
+    }
+}
+
 // convert dnstag type to an enum
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Hash)]
 pub enum DnsType {
@@ -15,14 +25,14 @@ pub enum DnsType {
 
 // implement FromStr for DnsType
 impl std::str::FromStr for DnsType {
-    type Err = String;
+    type Err = UnsupportedRecordType;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "A" => Ok(DnsType::A),
             "AAAA" => Ok(DnsType::AAAA),
             "CNAME" => Ok(DnsType::CNAME),
-            _ => Err(format!("Invalid DNS type: {}", s)),
+            _ => Err(UnsupportedRecordType(s.to_string())),
         }
     }
 }

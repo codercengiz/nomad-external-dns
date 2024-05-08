@@ -3,7 +3,6 @@ use std::time::Duration;
 use clap::Parser;
 
 use consul_external_dns::hetzner_dns;
-use reqwest::Url;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 
 use consul_external_dns::config::{Config, DnsProvider};
@@ -27,7 +26,7 @@ async fn main() {
 
     // Initialize Consul Client
     println!("=> Creating Consul client");
-    let consul_client = create_consul_client(&config).await;
+    let mut consul_client = create_consul_client(&config).await;
     println!("===> created Consul client successfully");
 
     // Create Consul session
@@ -55,13 +54,23 @@ async fn main() {
     }
     println!("===> acquired Consul lock successfully");
 
+    // Read dns records from consul store and save the state the consul_client.kv_dns_records
+    let dns_records_state = match consul_client.fetch_all_dns_records().await {
+        Ok(records) => records,
+        Err(e) => {
+            eprintln!("===> failed to fetch Consul DNS records: {}", e);
+            return;
+        }
+    };
+    consul_client.kv_dns_records = dns_records_state;
+
     process_dns_records(consul_client, dns_provider, cancel).await;
 }
 
 async fn create_consul_client(config: &Config) -> ConsulClient {
     loop {
         match ConsulClient::new(
-            Url::parse(&config.consul_address).expect("Invalid URL"),
+            config.consul_address.clone(),
             config.consul_datacenter.clone(),
         ) {
             Ok(client) => return client,
@@ -95,11 +104,11 @@ async fn renew_session_periodically(
 }
 
 async fn process_dns_records(
-    consul_client: ConsulClient,
+    mut consul_client: ConsulClient,
     dns_provider: Box<dyn DnsProviderTrait>,
     cancel_token: CancellationToken,
 ) {
-    let mut consul_dns_index: Option<u64> = None;
+    let mut consul_dns_index: Option<String> = None;
     loop {
         // Fetch current DNS records from Consul
         println!("=> Fetching DNS records from Consul store");
@@ -134,6 +143,7 @@ async fn process_dns_records(
             fetched_dns_records.len()
         );
 
+        println!("The services in Consul have changed now; DNS records in the DNS provider need to be updated.");
         let mut all_success = true;
 
         println!("=> Creating DNS records in the DNS provider");
@@ -152,7 +162,7 @@ async fn process_dns_records(
 
                 // Store the record in Consul
                 match consul_client
-                    .store_dns_record(record_id, fetched_dns_record)
+                    .store_dns_record(record_id, fetched_dns_record.clone())
                     .await
                 {
                     Ok(_) => println!("===> DNS record stored in Consul"),
@@ -184,18 +194,29 @@ async fn process_dns_records(
             }
         }
 
+        println!("=> Storing all DNS records in Consul KV store");
         if all_success {
-            println!("All DNS updates or creations succeeded.");
-        } else {
-            eprintln!("Some DNS updates or creations failed.");
-        }
-
-        tokio::select! {
-            _ = cancel_token.cancelled() => {
-                println!("Exiting Consul External DNS, because the cancel token was triggered.");
-                break;
+            match consul_client.store_all_dns_records().await {
+                Ok(()) => println!("===> stored all DNS records in Consul"),
+                Err(e) => {
+                    eprintln!("===> failed to store all DNS records in Consul: {}", e);
+                    all_success = false;
+                }
             }
-            _ = sleep(Duration::from_secs(1)) => {},
-        };
+
+            if all_success {
+                println!("All DNS updates or creations succeeded.");
+            } else {
+                eprintln!("Some DNS updates or creations failed.");
+            }
+
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    println!("Exiting Consul External DNS, because the cancel token was triggered.");
+                    break;
+                }
+                _ = sleep(Duration::from_secs(1)) => {},
+            };
+        }
     }
 }

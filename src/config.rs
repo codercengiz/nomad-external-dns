@@ -11,9 +11,9 @@ pub enum DnsProvider {
 #[derive(Clone, Debug, Parser)]
 #[command(author, about, version)]
 pub struct Config {
-    /// Specifies the address of the Consul server. Defaults to "http://127.0.0.1:8500".
-    #[arg(long, default_value = "http://127.0.0.1:8500")]
-    pub consul_address: String,
+    /// Specifies the address of the Consul server.
+    #[arg(long, default_value = "localhost:8500")]
+    pub consul_address: url::Url,
 
     /// Optionally sets the datacenter of the Consul server.
     #[arg(long)]
@@ -34,11 +34,11 @@ pub struct HetznerConfig {
     #[arg(long)]
     pub dns_zone_id: String,
 
-    /// Sets the Hetzner DNS API URL. Defaults to "https://dns.hetzner.com/api/v1".
+    /// Sets the Hetzner DNS API URL.
     #[arg(
         long,
         env = "HETZNER_DNS_API_URL",
         default_value = "https://dns.hetzner.com/api/v1"
     )]
-    pub api_url: String,
+    pub api_url: url::Url,
 }

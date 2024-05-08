@@ -27,7 +27,7 @@ mod tests {
         let config = HetznerConfig {
             dns_token: "fake_token".to_string(),
             dns_zone_id: "fake_zone_id".to_string(),
-            api_url: server.url(),
+            api_url: url::Url::parse(&server.url()).expect("Invalid URL"),
         };
         let hetzner_dns = HetznerDns { config };
         let consul_dns_record = DnsRecord {
@@ -90,19 +90,18 @@ mod tests {
             dns_provider: DnsProvider::Hetzner(HetznerConfig {
                 dns_token: "fake".to_string(),
                 dns_zone_id: "fake".to_string(),
-                api_url: "fake".to_string(),
+                api_url: url::Url::parse(&server.url()).expect("Invalid URL"),
             }),
-            consul_address: format!("http://{}:{}", hostname, port),
+            consul_address: url::Url::parse(format!("http://{}:{}", hostname, port).as_str())
+                .expect("Invalid URL"),
             consul_datacenter: None,
         };
 
-        let consul_client = ConsulClient::new(
-            Url::parse(&config.consul_address).expect("Invalid URL"),
-            config.consul_datacenter.clone(),
-        )
-        .expect("Failed to create Consul client");
+        let consul_client =
+            ConsulClient::new(config.consul_address, config.consul_datacenter.clone())
+                .expect("Failed to create Consul client");
 
-        let mut consul_index: Option<u64> = None;
+        let mut consul_index: Option<String> = None;
 
         let dns_tags = match consul_client.fetch_service_tags(&mut consul_index).await {
             Ok(tags) => tags,
