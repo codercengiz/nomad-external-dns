@@ -127,8 +127,6 @@ impl ConsulClient {
     }
 
     /// Acquire a lock
-    ///
-    /// Times out after a while and returns an error if it does.
     pub async fn acquire_lock(&self, session_id: Uuid) -> Result<()> {
         let mut interval = interval(Duration::from_secs(10));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -163,7 +161,7 @@ impl ConsulClient {
     }
 
     async fn wait_for_lock(&self) -> Result<(), anyhow::Error> {
-        let mut consul_index: Option<u64> = None;
+        let mut consul_index: Option<String> = None;
         loop {
             let lock_url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
 
@@ -175,16 +173,15 @@ impl ConsulClient {
             }
 
             if let Some(index) = consul_index.take() {
-                req = req.query(&[("index", &index.to_string())]);
+                req = req.query(&[("index", &index)]);
             }
-
             let response = req.send().await?;
 
             consul_index = response
                 .headers()
                 .get("X-Consul-Index")
                 .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse().ok());
+                .map(|value| value.to_string());
 
             let kvs = response.json::<Vec<ConsulKVResponse>>().await?;
 
