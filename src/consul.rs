@@ -99,7 +99,6 @@ pub struct ConsulClient {
     pub catalog_api_base_url: Url,
     pub session_api_base_url: Url,
     pub datacenter: Option<String>,
-    pub kv_dns_records: HashMap<String, DnsRecord>,
 }
 
 impl ConsulClient {
@@ -114,7 +113,6 @@ impl ConsulClient {
             catalog_api_base_url,
             session_api_base_url,
             datacenter: consul_datacenter,
-            kv_dns_records: HashMap::new(),
         })
     }
 
@@ -285,39 +283,14 @@ impl ConsulClient {
         Ok(dns_tags)
     }
 
-    /// Stores a single DNS record in Consul.
-    /// This function fetches the current state of DNS records, updates it with the new record,
-    /// and then re-stores the updated state back into Consul.
-    pub async fn store_dns_record(
-        &mut self,
-        provider_record_id: String,
-        dns_record: DnsRecord,
-    ) -> Result<(), anyhow::Error> {
-        match self
-            .kv_dns_records
-            .insert(provider_record_id, dns_record.clone())
-        {
-            Some(_) => Err(anyhow::anyhow!("Unexpected record update")),
-            None => Ok(()),
-        }
-    }
-
-    /// Deletes a single DNS record from Consul.
-    /// This function fetches the current DNS records, removes the specified record, and then updates
-    /// the store in Consul.
-    pub async fn delete_dns_record(&mut self, record_id: &str) -> Result<(), anyhow::Error> {
-        if self.kv_dns_records.remove(record_id).is_some() {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Record not found"))
-        }
-    }
-
     // Store all DNS records under a single key as a HashMap
-    pub async fn store_all_dns_records(&self) -> Result<()> {
+    pub async fn update_consul_dns_records(
+        &self,
+        dns_state: HashMap<String, DnsRecord>,
+    ) -> Result<()> {
         let url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
 
-        let mut req = self.http_client.put(url).json(&self.kv_dns_records);
+        let mut req = self.http_client.put(url).json(&dns_state);
 
         // Set dc if it is provided in the config
         if let Some(dc) = &self.datacenter {
