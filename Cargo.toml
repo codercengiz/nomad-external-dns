@@ -1,0 +1,29 @@
+[package]
+name = "consul_external_dns"
+description = "Consul External DNS Tool"
+repository = "https://github.com/codercengiz/consul-external-dns"
+license = "MIT"
+readme = "README.md"
+keywords = ["nomad", "consul", "external", "dns", "hetzner"]
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1.80"
+clap = { version = "4", features = ["derive","env"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde_json = "1.0"
+base64 = "0.22.1"
+uuid = {version = "1.8.0", features = ["serde"]} 
+tokio-util = "0.7.11"
+url = "2.5.0"
+humantime = "2.1.0"
+
+[dev-dependencies]
+mockito = "1.4.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+rstest = "0.19"
+fake = { version = "2.6.1", features = ["chrono", "chrono-tz", "derive"] }
