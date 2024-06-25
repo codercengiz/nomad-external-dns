@@ -132,14 +132,13 @@ impl ConsulClient {
 
         let session_url = self.session_api_base_url.join("create")?;
 
-        let mut req = self.http_client.put(session_url).json(&session_request);
-
-        // Set dc if it is provided in the config
-        if let Some(dc) = &self.datacenter {
-            req = req.query(&[("dc", dc)]);
-        }
-
-        let resp = req.send().await?.error_for_status()?;
+        let resp = self
+            .http_client
+            .put(session_url)
+            .json(&session_request)
+            .send()
+            .await?
+            .error_for_status()?;
         let session_response: CreateSessionResponse = resp.json().await?;
 
         let join_handle = tokio::spawn(
@@ -159,14 +158,11 @@ impl ConsulClient {
             .session_api_base_url
             .join(&format!("renew/{}", session_id))?;
 
-        let mut req = self.http_client.put(session_url);
-
-        // Set dc if it is provided in the config
-        if let Some(dc) = &self.datacenter {
-            req = req.query(&[("dc", dc)]);
-        }
-
-        req.send().await?.error_for_status()?;
+        self.http_client
+            .put(session_url)
+            .send()
+            .await?
+            .error_for_status()?;
         println!("Renewed Consul session: {}", session_id);
         Ok(())
     }
@@ -181,11 +177,6 @@ impl ConsulClient {
 
             let mut req = self.http_client.put(lock_url);
             req = req.query(&[("acquire", &session_id.to_string())]);
-
-            // Set dc if it is provided in the config
-            if let Some(dc) = &self.datacenter {
-                req = req.query(&[("dc", dc)]);
-            }
 
             let resp = req.send().await?;
             let body = resp.text().await?;
@@ -211,11 +202,6 @@ impl ConsulClient {
             let lock_url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
 
             let mut req = self.http_client.get(lock_url);
-
-            // Set dc if it is provided in the config
-            if let Some(dc) = &self.datacenter {
-                req = req.query(&[("dc", dc)]);
-            }
 
             if let Some(index) = consul_index.take() {
                 req = req.query(&[("index", &index)]);
@@ -247,11 +233,6 @@ impl ConsulClient {
         let services_url = self.catalog_api_base_url.join("services")?;
 
         let mut req = self.http_client.get(services_url);
-
-        // Set dc if it is provided in the config
-        if let Some(dc) = &self.datacenter {
-            req = req.query(&[("dc", dc)]);
-        }
 
         if let Some(index) = consul_index {
             req = req.query(&[("index", &index.to_string())]);
@@ -290,14 +271,12 @@ impl ConsulClient {
     ) -> Result<()> {
         let url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
 
-        let mut req = self.http_client.put(url).json(&dns_state);
-
-        // Set dc if it is provided in the config
-        if let Some(dc) = &self.datacenter {
-            req = req.query(&[("dc", dc)]);
-        }
-
-        req.send().await?.error_for_status()?;
+        self.http_client
+            .put(url)
+            .json(&dns_state)
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -306,14 +285,7 @@ impl ConsulClient {
     pub async fn fetch_all_dns_records(&self) -> Result<HashMap<String, DnsRecord>, anyhow::Error> {
         let url = self.kv_api_base_url.join(CONSUL_STORE_KEY)?;
 
-        let mut req = self.http_client.get(url);
-
-        // Set dc if it is provided in the config
-        if let Some(dc) = &self.datacenter {
-            req = req.query(&[("dc", dc)]);
-        }
-
-        let resp = req.send().await?;
+        let resp = self.http_client.get(url).send().await?;
 
         if !resp.status().is_success() {
             if resp.status() == StatusCode::NOT_FOUND {
@@ -449,15 +421,12 @@ fn session_handler(
             };
 
             println!("Renewing Consul session");
-
-            let mut req = client.http_client.put(renewal_url.clone());
-
-            // Set dc if it is provided in the config
-            if let Some(dc) = &client.datacenter {
-                req = req.query(&[("dc", dc)]);
-            }
-
-            let res = req.send().await.and_then(|res| res.error_for_status());
+            let res: std::result::Result<_, _> = client
+                .http_client
+                .put(renewal_url.clone())
+                .send()
+                .await
+                .and_then(|res| res.error_for_status());
             if let Err(err) = res {
                 eprintln!("Renewing Consul session failed, aborting: {err}");
                 token.cancel();
@@ -466,13 +435,12 @@ fn session_handler(
         }
 
         println!("Destroying Consul session");
-        let mut req = client.http_client.put(destroy_url);
-
-        // Set dc if it is provided in the config
-        if let Some(dc) = &client.datacenter {
-            req = req.query(&[("dc", dc)]);
-        }
-        let res = req.send().await.and_then(|res| res.error_for_status());
+        let res = client
+            .http_client
+            .put(destroy_url)
+            .send()
+            .await
+            .and_then(|res| res.error_for_status());
         if let Err(err) = res {
             eprintln!("Destraying Consul session failed: {err}");
         }
