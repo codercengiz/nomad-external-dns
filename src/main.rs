@@ -3,13 +3,12 @@ use std::time::Duration;
 use clap::Parser;
 
 use consul_external_dns::hetzner_dns;
-use tokio::time::{interval, sleep, MissedTickBehavior};
+use tokio::time::sleep;
 
 use consul_external_dns::config::{Config, DnsProvider};
 use consul_external_dns::consul::ConsulClient;
 use consul_external_dns::dns_trait::DnsProviderTrait;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
@@ -31,20 +30,12 @@ async fn main() {
 
     // Create Consul session
     println!("=> Creating Consul session");
-    let session_id = consul_client
-        .create_session()
+    let consul_session = consul_client
+        .create_session(config.consul_ttl, cancel.clone())
         .await
-        .expect("===> failed to create consul session");
+        .expect("===> failed to create Consul session");
+    let session_id = consul_session.session_id;
     println!("===> created Consul session successfully");
-
-    // Spawn a task to renew the session periodically
-    {
-        tokio::spawn(renew_session_periodically(
-            consul_client.clone(),
-            session_id,
-            cancel.clone(),
-        ));
-    }
 
     // Acquire Lock
     println!("=> Acquiring Consul lock");
@@ -65,6 +56,11 @@ async fn main() {
     consul_client.kv_dns_records = dns_records_state;
 
     process_dns_records(consul_client, dns_provider, cancel).await;
+
+    consul_session
+        .join_handle
+        .await
+        .expect("Failed to join Consul session handler task");
 }
 
 async fn create_consul_client(config: &Config) -> ConsulClient {
@@ -77,27 +73,6 @@ async fn create_consul_client(config: &Config) -> ConsulClient {
             Err(e) => {
                 eprintln!("===> failed to create Consul client: {}", e);
                 sleep(Duration::from_millis(100)).await;
-            }
-        }
-    }
-}
-
-async fn renew_session_periodically(
-    consul_client: ConsulClient,
-    session_id: Uuid,
-    cancel_token: CancellationToken,
-) {
-    let mut interval = interval(Duration::from_secs(15));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    loop {
-        interval.tick().await;
-        println!("=> Renewing session {session_id}");
-        match consul_client.renew_session(session_id).await {
-            Ok(_) => println!("===> renewed session"),
-            Err(err) => {
-                println!("===> renewing session failed, shutting down: {err}");
-                cancel_token.cancel();
-                break;
             }
         }
     }

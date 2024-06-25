@@ -95,6 +95,7 @@ mod tests {
             consul_address: url::Url::parse(format!("http://{}:{}", hostname, port).as_str())
                 .expect("Invalid URL"),
             consul_datacenter: None,
+            consul_ttl: std::time::Duration::from_secs(30),
         };
 
         let consul_client =

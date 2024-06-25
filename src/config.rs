@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use clap::{Parser, Subcommand};
 
 /// Available DNS providers as subcommands, each with its own configuration options
@@ -18,6 +20,10 @@ pub struct Config {
     /// Optionally sets the datacenter of the Consul server.
     #[arg(long)]
     pub consul_datacenter: Option<String>,
+
+    /// Consul TTL times out after this duration without being renewed
+    #[arg(long, default_value = "30s", value_parser = humantime::parse_duration)]
+    pub consul_ttl: Duration,
 
     #[command(subcommand)]
     pub dns_provider: DnsProvider,

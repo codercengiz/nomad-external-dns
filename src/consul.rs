@@ -1,17 +1,51 @@
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    future::Future,
     time::{Duration, SystemTime},
 };
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::{
+    task::JoinHandle,
+    time::{interval, MissedTickBehavior},
+};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::dns_trait::DnsType;
 
 const CONSUL_STORE_KEY: &str = "dns_records_lock";
+
+#[derive(Copy, Clone)]
+enum SessionDuration {
+    Seconds(u32),
+}
+
+impl TryFrom<Duration> for SessionDuration {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Duration) -> Result<Self> {
+        // Consul only supports durations of up to 86400 seconds.
+        let secs = value.as_secs();
+        if secs > 86400 {
+            bail!("Tried to convert a duration longer than 24 hours into SessionDuration");
+        }
+        Ok(SessionDuration::Seconds(secs as u32))
+    }
+}
+
+impl Serialize for SessionDuration {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&match self {
+            Self::Seconds(s) => format!("{s}s"),
+        })
+    }
+}
 
 #[derive(serde::Serialize)]
 struct CreateSessionRequest {
@@ -21,7 +55,7 @@ struct CreateSessionRequest {
     behavior: &'static str,
     /// How long the session will survive without being renewed.
     #[serde(rename = "TTL")]
-    ttl: &'static str,
+    ttl: SessionDuration,
     /// How long the locks held by this session should keep being held after the session
     /// has expired.
     #[serde(rename = "LockDelay")]
@@ -86,11 +120,15 @@ impl ConsulClient {
 
     /// Create a new session in Consul
     /// This session is used to acquire a lock
-    pub async fn create_session(&self) -> Result<Uuid, anyhow::Error> {
+    pub async fn create_session(
+        &self,
+        ttl: Duration,
+        token: CancellationToken,
+    ) -> Result<ConsulSession, anyhow::Error> {
         let session_request = CreateSessionRequest {
             name: "external-dns",
             behavior: "release",
-            ttl: "30s",
+            ttl: ttl.try_into()?,
             lock_delay: "30s",
         };
 
@@ -105,7 +143,16 @@ impl ConsulClient {
 
         let resp = req.send().await?.error_for_status()?;
         let session_response: CreateSessionResponse = resp.json().await?;
-        Ok(session_response.id)
+
+        let join_handle = tokio::spawn(
+            session_handler(self.clone(), token, session_response.id, ttl)
+                .context("failed to create Consul session handler")?,
+        );
+
+        Ok(ConsulSession {
+            session_id: session_response.id,
+            join_handle,
+        })
     }
 
     /// Renew the Consul session
@@ -393,4 +440,68 @@ fn parse_dns_tags(tags: Vec<String>) -> Vec<DnsRecord> {
     }
 
     records
+}
+
+pub struct ConsulSession {
+    pub session_id: Uuid,
+    pub join_handle: JoinHandle<()>,
+}
+
+fn session_handler(
+    client: ConsulClient,
+    token: CancellationToken,
+    id: Uuid,
+    ttl: Duration,
+) -> Result<impl Future<Output = ()> + Send> {
+    let id = id.to_string();
+
+    let renewal_url = client.session_api_base_url.join(&format!("renew/{}", id))?;
+    let destroy_url = client
+        .session_api_base_url
+        .join(&format!("destroy/{}", id))?;
+
+    Ok(async move {
+        // Renew the session at 2 times the TTL.
+        let mut interval = interval(ttl / 2);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            // Wait for either cancellation or an interval tick to have passed.
+            tokio::select! {
+                _ = token.cancelled() => {
+                    println!("Consul session handler was cancelled");
+                    break;
+                },
+                _ = interval.tick() => {},
+            };
+
+            println!("Renewing Consul session");
+
+            let mut req = client.http_client.put(renewal_url.clone());
+
+            // Set dc if it is provided in the config
+            if let Some(dc) = &client.datacenter {
+                req = req.query(&[("dc", dc)]);
+            }
+
+            let res = req.send().await.and_then(|res| res.error_for_status());
+            if let Err(err) = res {
+                eprintln!("Renewing Consul session failed, aborting: {err}");
+                token.cancel();
+                return;
+            }
+        }
+
+        println!("Destroying Consul session");
+        let mut req = client.http_client.put(destroy_url);
+
+        // Set dc if it is provided in the config
+        if let Some(dc) = &client.datacenter {
+            req = req.query(&[("dc", dc)]);
+        }
+        let res = req.send().await.and_then(|res| res.error_for_status());
+        if let Err(err) = res {
+            eprintln!("Destraying Consul session failed: {err}");
+        }
+    })
 }
